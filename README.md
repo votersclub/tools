@@ -17,7 +17,7 @@ You can use ipython or any other means you prefer to process the data.
 
 To get the toolset use command
 
-git clone https://git.openstack.org/votersclub
+git clone https://github.com/votersclub/tools.git
 
 ### Prerequisites
 
