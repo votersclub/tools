@@ -25,6 +25,7 @@ class data_passport:
         self.n_subjects = 0
         self.n_valid_bulletins = 0
         self.n_not_valid_bulletins = 0
+        self.n_given_bulletins = 0
         self.n_registered_voters = 0
         self.n_candidates = 0
         self.n_data_errors = 0
@@ -77,6 +78,7 @@ if __name__ == '__main__':
                     'nsubjects': 0,
                     'nvalid_bulletins': 0,
                     'nnotvalid_bulletins': 0,
+                    'ngiven_bulletins': 0,
                     'nregistered_voters': 0,
                     'ncandidates': 0,
                     'ndata_errors': 0
@@ -88,6 +90,10 @@ if __name__ == '__main__':
             vbc = ecfg['valid_bulletins_column']
             valid_bulletins = np.array(df[vbc], dtype=float)
             dp.n_valid_bulletins += np.int(valid_bulletins.sum())
+            gbc = 'calc0'
+            given_bulletins = np.array(df[gbc], dtype=float)
+            dp.n_given_bulletins += np.int(given_bulletins.sum())
+            dp.n_cf_formats[dd]['ngiven_bulletins'] += np.int(given_bulletins.sum())
             nvbc = ecfg['not_valid_bulletins_column']
             not_valid_bulletins = np.array(df[nvbc], dtype=float)
             dp.n_not_valid_bulletins += np.int(not_valid_bulletins.sum())
@@ -104,6 +110,8 @@ if __name__ == '__main__':
                     dp.data_errors[e['kind']] += 1
                 else:
                     dp.data_errors[e['kind']] = 1
+#                if e['kind'] == 10:
+#                    print 'In ', e_cfg_file, e['comment'].encode('utf-8')
             registered_voters = np.array(df[ecfg['registered_voters_column']], dtype=float)
             registered_voters[np.isnan(registered_voters)] = 0
             dp.n_registered_voters += int(registered_voters.sum())

@@ -16,7 +16,6 @@ from tableparser import LoadFailedDifferentCandidates
 from tableparser import LoadErrorNoDataMarker
 from tableparser import LoadFailedEmptyCells
 
-
 from tableparser import check_numbers
 from tableparser import KIND_TIK_UIK_STATS_ERROR
 from tableparser import KIND_TIK_UIK_CANDIDATES_STATS_ERROR
@@ -25,6 +24,7 @@ from tableparser import KIND_CANDIDATES_SUM_NOT_EQUAL_TO_ALL_VOTES_IN_DATA
 from tableparser import KIND_MISSING_UPPER_FIELD
 from tableparser import KIND_MISSING_LOWER_FIELD
 from tableparser import KIND_BADLY_FORMATTED_PAGE
+from tableparser import KIND_TURNOUT_HIGHER_THAN_100
 from tableparser import KIND_EMPTY_CELLS
 from tableparser import print_parser_stats
 
@@ -61,6 +61,18 @@ MAX_BAD_PAGE_ERRORS = 3
 
 dbg_mode = False
 print_level = 4
+
+calc_columns = []
+crec = { 'masks' : [u'бюллетенейвыданных', u'выданоуикизбирателям', u'выданоизбирателям',
+                    u'бюлетенейвыданных', u'выданобюллетеней', u'выданныхизбирательныхбюллетеней',
+                    u'избирателейпроголосов.'], 'header' : u'Выдано бюллетеней'}
+calc_columns.append(crec)
+stats = {}
+fn = ''
+stats_file_name = ''
+unusual_rows_file_name = ''
+processed_files = set()
+unusual_rows = {}
 
 def lprint(level, msg):
     if level <= print_level:
@@ -105,6 +117,48 @@ def profiler_decorator(func):
     return profiler_decorated_function
 
 
+def get_calc_values(config, uik, process_stats):
+    global fn
+    global stats
+    global unusual_rows
+    global processed_files
+    res = None
+
+    for c in calc_columns:
+        if res is None:
+            res = []
+        val = 0
+        for column_code in config['columns_map']:
+            if column_code not in config['candidates_columns']:
+                if u'число' not in config['columns_map'][column_code].lower():
+                    if process_stats and fn not in processed_files:
+                        if config['columns_map'][column_code] not in unusual_rows:
+                            unusual_rows[config['columns_map'][column_code]] = \
+                                config['commission']['href']
+                found = False
+                for m in c['masks']:
+                    t = config['columns_map'][column_code].lower().replace(' ', '').replace(',', '')
+                    if m in t:
+                        if found:
+                            print 'ERRORERROR: Found the mask "', m, '" for calculated columns when another mask was already found'
+                            exit(1)
+                        found = True
+                        val += uik[column_code]
+
+                        if process_stats and fn not in processed_files:
+                            if not config['columns_map'][column_code] in stats:
+                                stats[config['columns_map'][column_code]] = 1
+                            else:
+                                stats[config['columns_map'][column_code]] += 1
+                if not found:
+                    if process_stats and fn not in processed_files:
+                        stats[config['columns_map'][column_code]] = 0
+        res.append(val)
+    if process_stats:
+        processed_files.add(fn)
+
+    return res
+
 def add_uik_results(erecords, subject_title, uik_results):
     added_recs = 0
     tik_title = uik_results['config']['commission']['title']
@@ -128,10 +182,10 @@ def add_uik_results(erecords, subject_title, uik_results):
         # If number of data fields in uik records is less than number of fields
         # in upper config, fill in missing fields with N/A. Error about different
         # list of fields must be registered in check_elections
-        if len(rec) < len (erecords[0]) - len(uik_results['config']['candidates_columns']):
+        if len(rec) < len (erecords[0]) - len(uik_results['config']['candidates_columns']) - len(calc_columns):
             print 'ERRORERROR: add_uik_results:  number of fields in uik is smaller than in upper config'
             n_uik_data_columns = len(rec)
-            n_upper_data_columns = len(erecords[0]) - len(uik_results['config']['candidates_columns'])
+            n_upper_data_columns = len(erecords[0]) - len(uik_results['config']['candidates_columns']) - len(calc_columns)
             diff = n_upper_data_columns - n_uik_data_columns
             i = 0
             while i < diff:
@@ -146,6 +200,11 @@ def add_uik_results(erecords, subject_title, uik_results):
             if c_id in uik_results['config']['candidates_columns']:
                 rec.append(uik[c_id])
             c += 1
+
+        res = get_calc_values(uik_results['config'], uik, True)
+        if res is not None:
+            for r in res:
+                rec.append(r)
 
         erecords.append(rec)
         added_recs += 1
@@ -236,7 +295,7 @@ def fill_registered_voters_and_bulletins(elections):
         elif elections['config']['level'] == 'federal':
             elections['config']['votes_by_otkrepitelnie_column'] = 'NA'
 
-def check_uiks_results(se, uiks_stats, uiks_candidates_stats, subj, elections):
+def check_uiks_results(se, uiks_stats, uiks_candidates_stats, subj, elections, uik_results):
     # Some elections results lead to UIKs data w/o stats on OIKs level, there are just links to UIKs
     if 'upper_level_stats' in se['config']:
         for k in se['config']['upper_level_stats']:
@@ -281,6 +340,26 @@ def check_uiks_results(se, uiks_stats, uiks_candidates_stats, subj, elections):
                 }
                 elections['config']['data_errors'].append(rec)
                 print 'Data error: ' + repr(rec).decode('unicode-escape')
+
+    for subj in uik_results['subjects']:
+        res = get_calc_values(uik_results['config'], subj, False)
+        gb = res[0] # The very first calculated column is given bulletins value
+        vv = subj[elections['config']['registered_voters_column']]
+        if gb > vv:
+            rec = {
+                'kind': KIND_TURNOUT_HIGHER_THAN_100,
+                'subject': elections['config']['commission']['title'] + ' ' + subj['title'],
+                'upper_link': make_link(elections['config']['commission']['href'],
+                                        elections['config']['commission']['title'] + ' ' + subj['title']),
+                'subj_link': '',
+                'field': '',
+                'upper_value': gb,
+                'lower_value': vv,
+                'comment': u'Явка превышает 100%, значение ' + str((float (gb) / vv) * 100)
+            }
+            elections['config']['data_errors'].append(rec)
+            print 'data error: ' + repr(rec).decode('unicode-escape')
+
     return
 
 
@@ -299,6 +378,15 @@ def fill_upper_level_stats(elections, se, erecords):
 
         for s in elections['config']['data_columns']:
             rec.append(s)
+
+        i = 0
+        for c in calc_columns:
+            if 'calc_columns' not in elections['config']:
+                elections['config']['calc_columns'] = {}
+            elections['config']['calc_columns']['calc' + str(i)] = c['header']
+            elections['config']['columns_map']['calc' + str(i)] = c['header']
+            rec.append('calc' + str(i))
+            i += 1
         erecords.append(rec)
     return
 
@@ -378,16 +466,12 @@ def check_elections_correctness(elections, erecords):
 def process_uik_page(fmt, page_level, subj_elections, top_elections,
                      erecords, subj, uiks_stats, uiks_candidates_stats, gs, subj_title):
     try:
-        #if 'commission' in subj['config']:
-        #    subj_title = subj['config']['commission']['title']
-        #else:
-        #    subj_title = subj['title']
         parser = HTMLResultsParser(subj_elections['config']['uiks_results'], fmt, True, page_level)
         uik_results = parser.parse_results_page(top_elections['config'], gs)
         add_uik_results(erecords, subj_title, uik_results)
         add_lower_stats(uiks_stats, uik_results['config']['upper_level_stats'])
         add_lower_stats(uiks_candidates_stats, uik_results['config']['upper_level_candidates_stats'])
-        check_uiks_results(subj_elections, uiks_stats, uiks_candidates_stats, subj_elections, top_elections)
+        check_uiks_results(subj_elections, uiks_stats, uiks_candidates_stats, subj_elections, top_elections, uik_results)
         if 'tik_data' in uik_results['config']:
             top_elections['config']['tik_data'].append(uik_results['config']['tik_data'])
             print 'FOUND TIK DATA AT ' + subj_elections['config']['uiks_results']
@@ -576,6 +660,8 @@ def load_elections_fmt(number, fmt, up_level, date, typ, location,
                        participants, target_dir, fname_base, results_href, generic_href):
 
     csv_file_name = fname_base + '.csv'
+    global fn
+    fn = csv_file_name
     top_parser = HTMLResultsParser(results_href, fmt, False, 0)
     gs = 0
     elections = top_parser.parse_results_page(None, gs)
@@ -606,6 +692,25 @@ def load_elections_fmt(number, fmt, up_level, date, typ, location,
 
     df.to_csv(target_dir + '/' + csv_file_name, encoding="utf-8", mode='w', sep=',', index=False, header=False)
     print 'Done'
+
+    global stats_file_name
+    global stats
+    global unusual_rows_file_name
+    global unusual_rows
+    sf = open(stats_file_name, 'w+')
+
+    for k, v in stats.items():
+        s = str(v) + ' ' + k
+        sf.write(s + '\n')
+    sf.close()
+
+    sf = open(unusual_rows_file_name, 'w+')
+
+    for k, v in unusual_rows.items():
+        s = str(v) + ' ' + k
+        sf.write(s + '\n')
+    sf.close()
+
     return
 
 
@@ -789,7 +894,6 @@ def load_elections_from_list(level, list_file_name, target_dir):
 
     with open(list_file_name) as json_data:
         elections_list = json.load(json_data)
-
     i = 0
     nloaded = 0
     total_elections = len(elections_list['elections'])
@@ -803,8 +907,12 @@ def load_elections_from_list(level, list_file_name, target_dir):
         print 'Elections number ' + str(i) + ' (out of ' + str(total_elections) + \
               ') target_file_name_base: ' + target_file_name_base
         print e['results_href']
+        if dbg_mode and i != 575:
+            print 'DEBUG MODE, SKIPPING ELECTIONS not of number 575'
+            i += 1
+            continue
         if e['type'] != 'referendum':
-            if load_elections(elections_list['level'], e['number'], e['date'], e['type'], e['location'], e['type'], target_dir,
+            if load_elections(elections_list['level'], e['number'], e['date'], e['type'], e['location'], e['participants'], target_dir,
                                            target_file_name_base, e['results_href'], e['title'], e['generic_href']):
                 nloaded += 1
             else:
@@ -822,23 +930,86 @@ def load_elections_from_list(level, list_file_name, target_dir):
     return
 
 
+def get_json_data(fname, href):
+    try:
+        with open(fname) as f:
+            data = json.load(f)
+    except:
+        response = get_safe(href)
+        data = json.loads(response.text)
+        with open(fname, 'wb') as fp:
+            fp.write(json.dumps(data, ensure_ascii=False, indent=4).encode("utf-8"))
+            fp.close()
+
+    return data
+
+
 if __name__ == '__main__':
 
     reload(sys)
     sys.setdefaultencoding('utf-8')
 
+    #targetdir = '../../nc9/'
     targetdir = 'data'
     for a in sys.argv:
         print a
     args = sys.argv[1:]
     print "Target directory: " + targetdir
     print "Working directory: " + os.getcwd()
+
     if 'subject' in args:
+        stats_file_name = targetdir + '/subjstats.txt'
+        unusual_rows_file_name = targetdir + '/subjunusual_rows.txt'
+
         load_elections_list(targetdir + '/region_list.htm', targetdir)
         load_elections_from_list('subject', targetdir + '/subject_elections_list.jsn', targetdir)
     elif 'federal' in args:
+        stats_file_name = targetdir + '/fedstats.txt'
+        unusual_rows_file_name = targetdir + '/fedunusual_rows.txt'
         load_elections_list(targetdir + '/federal_list.htm', targetdir)
         load_elections_from_list('federal', targetdir + '/federal_elections_list.jsn', targetdir)
+    elif 'macedonia' in args:
+        from tableparser import get_safe
+        from bs4 import BeautifulSoup
+        root_url = "https://api-rezultati.sec.mk/Home/JsonResultsData?cs=mk-MK&r=1&rd=r"
+        root_name_base = 'root_name'
+        root_name = root_name_base + '.json'
+        root_dir = 'mac_data'
+        # root URL https://api-rezultati.sec.mk/Home/JsonResultsData?cs=mk-MK&r=1&rd=r
+        # https://api-rezultati.sec.mk/Home/JsonResultsMapData?cs=mk-MK&r=1&rd=r&eu=all&m=71&ps=2013
+        # &m - municipalitet id
+        # &ps - polling station
+        root_data = get_json_data(root_dir + '/' + root_name, root_url)
+
+        if 'GlobalData' not in root_data:
+            print 'Invalid root JSON given, exiting'
+            exit(1)
+
+        for m in root_data['Menu']['Municipalities']:
+            mun_url = root_url + '&eu=all&m=' + str(m['MunicipalityID'])
+            print 'Url for minicipality ' + str(m['MunicipalityID']) + ' ' + m['MunicipalityName'] + ' is: ' + mun_url
+            mun_name_base = root_dir + '/' + root_name_base + '_' + str(m['MunicipalityID'])
+            mun_file = mun_name_base + '.json'
+            print 'File name for minicipality ' + str(m['MunicipalityID']) + ' ' + m['MunicipalityName'] + ' is: ' + mun_file
+
+            mun_data = get_json_data(mun_file, mun_url)
+            if mun_data['Menu']['SelectedMunicipalityID'] != m['MunicipalityID']:
+                print "mun_data['SelectedMunicipalityID'] != m['MunicipalityID'], exiting"
+                exit(1)
+
+            for ps in mun_data['Menu']['PollinStations']:
+                ps_url = mun_url + '&ps=' + str(ps['PollingStationID'])
+                print 'Url for ps ' + str(ps['PollingStationID']) + ' ' + m['MunicipalityName'] + ' is: ' + ps_url
+                ps_file = mun_name_base + '_' + str(ps['PollingStationID']) + '.json'
+                print 'File name for ps ' + str(ps['PollingStationID']) + ' ' + m['MunicipalityName'] + ' is: ' + ps_file
+                ps_data = get_json_data(ps_file, ps_url)
+                if ps_data['Menu']['SelectedPollingStationID'] != ps['PollingStationID']:
+                    print "ps_data['SelectedPollingStationID'] != ps['PollingStationID'], exiting"
+                    exit(1)
+
+        exit(0)
+
+
 
     print_parser_stats()
     exit(0)

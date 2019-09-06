@@ -5,12 +5,12 @@ import os
 import json
 import glob
 
-data_path = 'data'
+data_path = './'
 n = 0
 
 def anglify(e):
 	m = hashlib.md5()
-	print e['source_file']
+	print e['source_file'].encode('utf8')
 	m.update(e['source_file'].encode('utf8'))
 	en = e['year'] + e['level'] + '_' + e['type'] + '_' + m.hexdigest() + e['source_file'][-7:-4] + '.csv'
 	print en

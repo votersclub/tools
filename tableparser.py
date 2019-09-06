@@ -48,7 +48,7 @@ ERROR_COLUMNS = [
     [u'Верхняя комиссия', u'', u'Действительных бюллетеней', u'Сумма голосов за кандидатов', u''],  #7
     [u'Верхняя комиссия', u'Нижняя комиссия', u'', u'Значение', u'Поле'], #8
     [u'Комиссия',       u'', u'', u'', u''], #9
-    [u'Комиссия',       u'', u'Бюллетеней (действ. + недейств.)', u'Избирателей', u''], #10
+    [u'Комиссия',       u'', u'Выдано бюллетеней', u'Зарегистрировано избирателей', u''], #10
     [u'',       u'Страница', u'', u'', u'']
 ]
 
@@ -324,22 +324,6 @@ def check_elections(elections, page_with_link_to_uiks, page_with_uiks, up_config
                     print 'info: No row with valid_bulletins_column'
                     print 'LoadFailedEmptyCells'
                     raise LoadFailedEmptyCells(elections['config']['commission']['href'])
-                nb = subj[up_config['valid_bulletins_column']] + subj[up_config['not_valid_bulletins_column']]
-                vv = subj[up_config['registered_voters_column']]
-                if nb > vv:
-                    rec = {
-                        'kind': KIND_TURNOUT_HIGHER_THAN_100,
-                        'subject': elections['config']['commission']['title'] + ' ' + subj['title'],
-                        'upper_link': make_link(elections['config']['commission']['href'],
-                                                elections['config']['commission']['title'] + ' ' + subj['title']),
-                        'subj_link': '',
-                        'field': '',
-                        'upper_value': nb,
-                        'lower_value': vv,
-                        'comment': u'Явка превышает 100% '
-                    }
-                    data_errors.append(rec)
-                    print 'data error: ' + repr(rec).decode('unicode-escape')
                 if page_with_uiks:
                     gs += s
     if not page_with_link_to_uiks:
@@ -517,10 +501,10 @@ class HTMLResultsParser:
                                                up_config, self.page_level, gs)
 
             if self.page_with_uiks:
-                if u'УИК' not in elections['config']['commission']['title']:
+                if u'УИК' not in elections['config']['commission']['title'] and u'Участок' not in elections['config']['commission']['title']:
                     subjects = elections['subjects']
                     if len(subjects) == 0:
-                        print u'ERRORERROR0: parse_results_page: Did not find УИК in uik page title, title:'
+                        print u'ERRORERROR0: parse_results_page: Did not find УИК or Участок in uik page title, title:'
                         print elections['config']['commission']['title']
                         print 'url:' + self.url
                         #exit(1)
@@ -532,7 +516,7 @@ class HTMLResultsParser:
                             found = True
                             break
                     if found:
-                        print u'ERRORERROR1: parse_results_page: Did not find УИК in uik page title, url:'
+                        print u'ERRORERROR1: parse_results_page: Did not find УИК or Участок in uik page title, url:'
                         print self.url
             else:
                 if elections['config']['commission']['title'] is not None and u'УИК' in elections['config']['commission']['title']:
